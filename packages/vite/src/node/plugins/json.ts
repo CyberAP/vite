@@ -41,14 +41,14 @@ export function jsonPlugin(
   options: Required<JsonOptions>,
   isBuild: boolean,
 ): Plugin {
-  const plugin = {
+  return {
     name: 'vite:json',
 
     transform: {
+      filter: {
+        id: { include: jsonExtRE, exclude: SPECIAL_QUERY_RE },
+      },
       handler(json, id) {
-        if (!jsonExtRE.test(id)) return null
-        if (SPECIAL_QUERY_RE.test(id)) return null
-
         if (inlineRE.test(id) || noInlineRE.test(id)) {
           this.warn(
             `\n` +
@@ -119,14 +119,7 @@ export function jsonPlugin(
         }
       },
     },
-  } satisfies Plugin
-
-  // backward compat
-  const handler = plugin.transform.handler
-  ;(plugin as any).transform = handler
-  ;(plugin as any).transform.handler = handler
-
-  return plugin
+  }
 }
 
 function serializeValue(value: unknown): string {

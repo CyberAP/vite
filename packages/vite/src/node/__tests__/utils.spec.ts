@@ -17,6 +17,7 @@ import {
   isFileReadable,
   mergeWithDefaults,
   normalizePath,
+  numberToPos,
   posToNumber,
   processSrcSetSync,
   resolveHostname,
@@ -245,6 +246,34 @@ describe('posToNumber', () => {
   })
 })
 
+describe('numberToPos', () => {
+  test('simple', () => {
+    const actual = numberToPos('a\nb', 2)
+    expect(actual).toEqual({ line: 2, column: 0 })
+  })
+  test('pass though pos', () => {
+    const actual = numberToPos('a\nb', { line: 2, column: 0 })
+    expect(actual).toEqual({ line: 2, column: 0 })
+  })
+  test('empty line', () => {
+    const actual = numberToPos('a\n\nb', 3)
+    expect(actual).toEqual({ line: 3, column: 0 })
+  })
+  test('middle of line', () => {
+    const actual = numberToPos('abc\ndef', 5)
+    expect(actual).toEqual({ line: 2, column: 1 })
+  })
+  test('end of line', () => {
+    const actual = numberToPos('abc\ndef', 3)
+    expect(actual).toEqual({ line: 1, column: 3 })
+  })
+  test('out of range', () => {
+    expect(() => numberToPos('a\nb', 5)).toThrowError(
+      'offset is longer than source length',
+    )
+  })
+})
+
 describe('generateCodeFrames', () => {
   const source = `
 import foo from './foo'
@@ -259,6 +288,9 @@ foo()
 // 2
 // 3
 `.trim()
+  const veryLongSource = Array.from({ length: 2000 }, (_, i) => `// ${i}`).join(
+    '\n',
+  )
 
   const expectSnapshot = (value: string) => {
     try {
@@ -310,6 +342,10 @@ foo()
 
   test('invalid start > end', () => {
     expectSnapshot(generateCodeFrame(source, 2, 0))
+  })
+
+  test('supports more than 1000 lines', () => {
+    expectSnapshot(generateCodeFrame(veryLongSource, { line: 1200, column: 0 }))
   })
 })
 

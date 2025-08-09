@@ -3,12 +3,17 @@ import { posix, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, vi } from 'vitest'
 import { isWindows } from '../../../../shared/utils'
+import type { ExternalFetchResult } from '../../../../shared/invokeMethods'
 import { createModuleRunnerTester } from './utils'
 
 const _URL = URL
 
 describe('module runner initialization', async () => {
-  const it = await createModuleRunnerTester()
+  const it = await createModuleRunnerTester({
+    resolve: {
+      external: ['tinyglobby'],
+    },
+  })
 
   it('correctly runs ssr code', async ({ runner }) => {
     const mod = await runner.import('/fixtures/simple.js')
@@ -290,16 +295,51 @@ describe('module runner initialization', async () => {
     await expect(() =>
       runner.import('/fixtures/cyclic2/test5/index.js'),
     ).rejects.toMatchInlineSnapshot(
-      `[ReferenceError: Cannot access '__vite_ssr_import_1__' before initialization]`,
+      `[TypeError: Cannot read properties of undefined (reading 'ok')]`,
     )
   })
 
   it(`cyclic invalid 2`, async ({ runner }) => {
-    await expect(() =>
-      runner.import('/fixtures/cyclic2/test6/index.js'),
-    ).rejects.toMatchInlineSnapshot(
-      `[ReferenceError: Cannot access 'dep1' before initialization]`,
+    // It should be an error but currently `undefined` fallback.
+    expect(
+      await runner.import('/fixtures/cyclic2/test6/index.js'),
+    ).toMatchInlineSnapshot(
+      `
+      {
+        "dep1": "dep1: dep2: undefined",
+      }
+    `,
     )
+  })
+
+  it(`cyclic with mixed import and re-export`, async ({ runner }) => {
+    const mod = await runner.import('/fixtures/cyclic2/test7/Ion.js')
+    expect(mod).toMatchInlineSnapshot(`
+      {
+        "IonTypes": {
+          "BLOB": "Blob",
+        },
+        "dom": {
+          "Blob": "Blob",
+        },
+      }
+    `)
+  })
+
+  it(`execution order with mixed import and re-export`, async ({
+    runner,
+    onTestFinished,
+  }) => {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    onTestFinished(() => spy.mockRestore())
+
+    await runner.import('/fixtures/execution-order-re-export/index.js')
+    expect(spy.mock.calls.map((v) => v[0])).toMatchInlineSnapshot(`
+      [
+        "dep1",
+        "dep2",
+      ]
+    `)
   })
 
   it(`live binding (export default function f)`, async ({ runner }) => {
@@ -344,11 +384,25 @@ describe('module runner initialization', async () => {
 
   it(`export default getter is hoisted`, async ({ runner }) => {
     // Node error is `ReferenceError: Cannot access 'dep' before initialization`
-    await expect(() =>
-      runner.import('/fixtures/cyclic2/test9/index.js'),
-    ).rejects.toMatchInlineSnapshot(
-      `[ReferenceError: Cannot access '__vite_ssr_export_default__' before initialization]`,
+    // It should be an error but currently `undefined` fallback.
+    expect(
+      await runner.import('/fixtures/cyclic2/test9/index.js'),
+    ).toMatchInlineSnapshot(
+      `
+      {
+        "default": undefined,
+      }
+    `,
     )
+  })
+
+  it(`handle Object variable`, async ({ runner }) => {
+    const mod = await runner.import('/fixtures/top-level-object.js')
+    expect(mod).toMatchInlineSnapshot(`
+      {
+        "Object": "my-object",
+      }
+    `)
   })
 })
 
@@ -439,5 +493,25 @@ describe('virtual module hmr', async () => {
       const mod = runner.evaluatedModules.getModuleById('\0virtual:test')
       expect(mod?.exports.default).toBe('reloaded')
     })
+  })
+
+  it("the external module's ID and file are resolved correctly", async ({
+    server,
+    runner,
+  }) => {
+    await runner.import(
+      posix.join(server.config.root, 'fixtures/import-external.ts'),
+    )
+    const moduleNode = runner.evaluatedModules.getModuleByUrl('tinyglobby')!
+    const meta = moduleNode.meta as ExternalFetchResult
+    if (process.platform === 'win32') {
+      expect(meta.externalize).toMatch(/^file:\/\/\/\w:\//) // file:///C:/
+      expect(moduleNode.id).toMatch(/^\w:\//) // C:/
+      expect(moduleNode.file).toMatch(/^\w:\//) // C:/
+    } else {
+      expect(meta.externalize).toMatch(/^file:\/\/\//) // file:///
+      expect(moduleNode.id).toMatch(/^\//) // /
+      expect(moduleNode.file).toMatch(/^\//) // /
+    }
   })
 })

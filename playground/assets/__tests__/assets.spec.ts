@@ -14,7 +14,6 @@ import {
   readFile,
   readManifest,
   serverLogs,
-  untilUpdated,
   viteTestUrl,
   watcher,
 } from '~utils'
@@ -40,6 +39,17 @@ test('should have no 404s', () => {
     expect(msg).not.toMatch('404')
   })
 })
+
+test.runIf(isBuild)(
+  'should not warn about VITE_ASSET tokens in image-set',
+  async () => {
+    expect(serverLogs).toStrictEqual(
+      expect.not.arrayContaining([
+        expect.stringMatching(/VITE_ASSET__.*?didn't resolve at build time/),
+      ]),
+    )
+  },
+)
 
 test('should get a 404 when using incorrect case', async () => {
   expect((await fetchPath('icon.png')).headers.get('Content-Type')).toBe(
@@ -342,7 +352,7 @@ describe('css url() references', () => {
       editFile('nested/fragment-bg-hmr.svg', (code) =>
         code.replace('fill="blue"', 'fill="red"'),
       )
-      await untilUpdated(() => getBg('.css-url-svg'), 'red')
+      await expect.poll(() => getBg('.css-url-svg')).toMatch('red')
     }
   })
 
@@ -360,7 +370,7 @@ describe('css url() references', () => {
       editFile('nested/fragment-bg-hmr2.svg', (code) =>
         code.replace('fill="blue"', 'fill="red"'),
       )
-      await untilUpdated(() => getBg('.css-url-svg'), 'red')
+      await expect.poll(() => getBg('.css-url-svg')).toMatch('red')
     }
   })
 })
@@ -438,10 +448,7 @@ describe('svg fragments', () => {
   })
 
   test('via css url()', async () => {
-    const bg = await page.evaluate(() => {
-      return getComputedStyle(document.querySelector('.icon')).backgroundImage
-    })
-    expect(bg).toMatch(/svg#icon-clock-view"\)$/)
+    expect(await getBg('.icon')).toMatch(/svg#icon-clock-view"\)$/)
   })
 
   test('from js import', async () => {
@@ -467,13 +474,35 @@ test('Unknown extension assets import', async () => {
 
 test('?raw import', async () => {
   expect(await page.textContent('.raw')).toMatch('SVG')
+  expect(await page.textContent('.raw-html')).toBe('<div>partial</div>\n')
+
+  if (isBuild) return
+  editFile('nested/partial.html', (code) =>
+    code.replace('<div>partial</div>', '<div>partial updated</div>'),
+  )
+  await expect
+    .poll(() => page.textContent('.raw-html'))
+    .toBe('<div>partial updated</div>\n')
+  expect(browserLogs).toStrictEqual(
+    expect.arrayContaining([
+      expect.stringContaining('hot updated: /nested/partial.html?raw via'),
+    ]),
+  )
 })
 
 test('?no-inline svg import', async () => {
   expect(await page.textContent('.no-inline-svg')).toMatch(
     isBuild
-      ? /\/foo\/bar\/assets\/fragment-[-\w]{8}\.svg\?no-inline/
+      ? /\/foo\/bar\/assets\/fragment-[-\w]{8}\.svg/
       : '/foo/bar/nested/fragment.svg?no-inline',
+  )
+})
+
+test('?no-inline svg import -- multiple postfix', async () => {
+  expect(await page.textContent('.no-inline-svg-mp')).toMatch(
+    isBuild
+      ? /\/foo\/bar\/assets\/fragment-[-\w]{8}\.svg\?foo=bar/
+      : '/foo/bar/nested/fragment.svg?no-inline&foo=bar',
   )
 })
 
@@ -532,7 +561,31 @@ describe.runIf(isBuild)('encodeURI', () => {
 })
 
 test('new URL(..., import.meta.url)', async () => {
-  expect(await page.textContent('.import-meta-url')).toMatch(assetMatch)
+  const imgMatch = isBuild
+    ? /\/foo\/bar\/assets\/img-[-\w]{8}\.png/
+    : '/foo/bar/import-meta-url/img.png'
+
+  expect(await page.textContent('.import-meta-url')).toMatch(imgMatch)
+  if (isServe) {
+    const loadPromise = page.waitForEvent('load')
+    const newContent = readFile('import-meta-url/img-update.png', null)
+    let oldContent: Buffer
+    editFile('import-meta-url/img.png', null, (_oldContent) => {
+      oldContent = _oldContent
+      return newContent
+    })
+    await loadPromise // expect reload
+    await expect
+      .poll(() => page.textContent('.import-meta-url'))
+      .toMatch(imgMatch)
+
+    const loadPromise2 = page.waitForEvent('load')
+    editFile('import-meta-url/img.png', null, (_) => oldContent)
+    await loadPromise2 // expect reload
+    await expect
+      .poll(() => page.textContent('.import-meta-url'))
+      .toMatch(imgMatch)
+  }
 })
 
 test('new URL("@/...", import.meta.url)', async () => {
@@ -658,11 +711,11 @@ test('inline style test', async () => {
 
 if (!isBuild) {
   test('@import in html style tag hmr', async () => {
-    await untilUpdated(() => getColor('.import-css'), 'rgb(0, 136, 255)')
+    await expect.poll(() => getColor('.import-css')).toBe('rgb(0, 136, 255)')
     const loadPromise = page.waitForEvent('load')
     editFile('./css/import.css', (code) => code.replace('#0088ff', '#00ff88'))
     await loadPromise
-    await untilUpdated(() => getColor('.import-css'), 'rgb(0, 255, 136)')
+    await expect.poll(() => getColor('.import-css')).toBe('rgb(0, 255, 136)')
   })
 }
 
